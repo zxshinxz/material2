@@ -4,5 +4,13 @@ set -e -o pipefail
 
 
 echo "Shutting down Browserstack tunnel"
-echo "TODO: implement me"
-exit 1
+
+killall BrowserStackLocal
+
+while [[ -n `ps -ef | grep "BrowserStackLocal" | grep -v "grep"` ]]; do
+  printf "."
+  sleep .5
+done
+
+echo ""
+echo "Browserstack tunnel has been shut down"

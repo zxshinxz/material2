@@ -1,47 +1,78 @@
 #!/usr/bin/env node
 
 'use strict';
-/**
+
+/*
  * Creates a conventional changelog from the current git repository / metadata.
  */
 
-var fs = require('fs');
-var addStream = require('add-stream');
-var cl = require('conventional-changelog');
-var inStream = fs.createReadStream('CHANGELOG.md');
+const fs = require('fs');
+const merge2 = require('merge2');
+const changelog = require('conventional-changelog');
+const spawnSync = require('child_process').spawnSync;
+const npmVersion = require('../../package.json').version;
 
 /**
  * When the command line argument `--force` is provided, then the full changelog will created and overwritten.
  * By default, it will only create the changelog from the latest tag to head and prepends it to the changelog.
  */
-var isForce = process.argv.indexOf('--force') !== -1;
+const isForce = process.argv.indexOf('--force') !== -1;
+const previousChangelog = fs.createReadStream('CHANGELOG.md');
+const gitTags = getAvailableTags();
 
-inStream.on('error', function(err) {
-  console.error('An error occurred, while reading the previous changelog file.\n' +
-    'If there is no previous changelog, then you should create an empty file or use the `--force` flag.\n' + err);
+// Whether the npm version is later than the most recent tag.
+const isNpmLatest = npmVersion !== gitTags[0];
+// When the npm version is the latest, use the npm version, otherwise use the latest tag.
+const currentTag = isNpmLatest ? npmVersion : gitTags[0];
+// When the npm version is the latest use the most recent tag. Otherwise use the previous tag.
+const previousTag = isNpmLatest ? gitTags[0] : gitTags[1];
 
-  process.exit(1);
-});
+if (!isForce) {
+  previousChangelog.on('error', function(err) {
+    console.error('An error occurred, while reading the previous changelog file.\n' +
+      'If there is changelog file, you should create an empty file or use the `--force` flag.\n' + err);
 
-var config = {
+    process.exit(1);
+  });
+}
+
+const config = {
   preset: 'angular',
   releaseCount: isForce ? 0 : 1
 };
 
-var stream = cl(config)
-  .on('error', function(err) {
-    console.error('An error occurred while generating the changelog: ' + err);
-  })
-  .pipe(!isForce && addStream(inStream) || getOutputStream());
+const context = {
+  currentTag: currentTag,
+  previousTag: previousTag
+};
+
+let stream = changelog(config, context).on('error', function(err) {
+  console.error('An error occurred while generating the changelog: ' + err);
+});
+
+if (!isForce) {
+  // Append the previous changelog to the new generated one.
+  stream = merge2(stream, previousChangelog);
+} else {
+  stream.pipe(getOutputStream())
+}
 
 // When we are pre-pending the new changelog, then we need to wait for the input stream to be ending,
 // otherwise we can't write into the same destination.
 if (!isForce) {
-  inStream.on('end', function() {
+  previousChangelog.on('end', function() {
     stream.pipe(getOutputStream());
   });
 }
 
 function getOutputStream() {
   return fs.createWriteStream('CHANGELOG.md');
+}
+
+/**
+ * Resolves available tags over all branches from the repository metadata.
+ * @returns {Array.<String>} Array of available tags.
+ */
+function getAvailableTags() {
+  return spawnSync('git', ['tag']).stdout.toString().trim().split('\n').reverse();
 }

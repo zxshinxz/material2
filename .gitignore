@@ -23,6 +23,7 @@
 
 # IDEs
 /.idea
+/.vscode
 
 # misc
 .DS_Store
@@ -32,3 +33,4 @@
 /libpeerconnection.log
 npm-debug.log
 testem.log
+/.chrome

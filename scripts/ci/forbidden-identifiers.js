@@ -1,26 +1,21 @@
 #!/usr/bin/env node
 
 'use strict';
+
 /*
- * This script analyzes the current commits of the CI.
- * It will search for blocked statements, which have been added in the commits and fail if present.
+ * The forbidden identifiers script will check for blocked statements and also detect invalid
+ * imports of other scope packages.
+ *
+ * When running against a PR, the script will only analyze the specific amount of commits inside
+ * of the Pull Request.
+ *
+ * By default it checks all source files and fail if any errors were found.
  */
 
 const child_process = require('child_process');
 const fs = require('fs');
-
-const exec = function(cmd) {
-  return new Promise(function(resolve, reject) {
-    child_process.exec(cmd, function(err, stdout /*, stderr */) {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(stdout);
-      }
-    });
-  });
-};
-
+const path = require('path');
+const glob = require('glob').sync;
 
 const blocked_statements = [
   '\\bddescribe\\(',
@@ -31,118 +26,177 @@ const blocked_statements = [
   '\\bxit\\(',
   '\\bdebugger;',
   'from \\\'rxjs/Rx\\\'',
+  '\\r'
 ];
 
+const sourceFolders = ['./src', './e2e'];
 const blockedRegex = new RegExp(blocked_statements.join('|'), 'g');
 
-/**
- * Find the fork point between HEAD of the current branch, and master.
- * @return {Promise<string>} A promise which resolves with the fork SHA (or reject).
+/*
+ * Verify that the current PR is not adding any forbidden identifiers.
+ * Run the forbidden identifiers check against all sources when not verifying a PR.
  */
-function findForkPoint() {
-  return exec('git merge-base --fork-point HEAD master')
-    .then(function(stdout) {
-      return stdout.split('\n')[0];
+
+findTestFiles()
+
+  /* Only match .js or .ts, and remove .d.ts files. */
+  .then(files => files.filter(name => /\.(js|ts)$/.test(name) && !/\.d\.ts$/.test(name)))
+
+  /* Read content of the filtered files */
+  .then(files => files.map(name => ({ name, content: fs.readFileSync(name, 'utf-8') })))
+
+  /* Run checks against content of the filtered files. */
+  .then(diffList => findErrors(diffList))
+
+  /* Groups similar errors to simplify console output */
+  .then(errors => groupErrors(errors))
+
+  /* Print the resolved errors to the console */
+  .then(errors => printErrors(errors))
+
+  .catch(err => {
+    // An error occurred in this script. Output the error and the stack.
+    console.error(err.stack || err);
+    process.exit(2);
+  });
+
+/**
+ * Finds errors inside of changed files by running them against the blocked statements.
+ * @param {{name: string, content: string}[]} diffList
+ */
+function findErrors(diffList) {
+  return diffList.reduce((errors, diffFile) => {
+    let fileName = diffFile.name;
+    let content = diffFile.content.split('\n');
+    let lineNumber = 0;
+
+    content.forEach(line => {
+      lineNumber++;
+
+      let matches = line.match(blockedRegex);
+
+      if (matches) {
+
+        errors.push({
+          fileName,
+          lineNumber,
+          statement: matches[0]
+        });
+
+      }
     });
+
+    return errors;
+
+  }, []);
 }
 
 /**
- * Get the commit range to evaluate when this script is run.
- * @return {Promise<string>} A commit range of the form ref1...ref2.
+ * Groups similar errors in the same file which are present over a range of lines.
+ * @param {{fileName: string, lineNumber: number, statement: string}[]} errors
  */
-function getCommitRange() {
-  if (process.env['TRAVIS_COMMIT_RANGE']) {
-    return Promise.resolve(process.env['TRAVIS_COMMIT_RANGE']);
-  } else {
-    return findForkPoint().then((forkPointSha) => `${forkPointSha}...HEAD`);
+function groupErrors(errors) {
+
+  let initialError, initialLine, previousLine;
+
+  return errors.filter(error => {
+
+    if (initialError && isSimilarError(error)) {
+      previousLine = error.lineNumber;
+
+      // Overwrite the lineNumber with a string, which indicates the range of lines.
+      initialError.lineNumber = `${initialLine}-${previousLine}`;
+
+      return false;
+    }
+
+    initialLine = previousLine = error.lineNumber;
+    initialError = error;
+
+    return true;
+  });
+
+  /** Checks whether the given error is similar to the previous one. */
+  function isSimilarError(error) {
+    return initialError.fileName === error.fileName &&
+           initialError.statement === error.statement &&
+           previousLine === (error.lineNumber - 1);
   }
 }
 
 /**
+ * Prints all errors to the console and terminates the process if errors were present.
+ * @param {{fileName: string, lineNumber: number, statement: string}[]} errors
+ */
+function printErrors(errors) {
+  if (errors.length > 0) {
+
+    console.error('Error: You are using one or more blocked statements:\n');
+
+    errors.forEach(entry => {
+
+      // Stringify the statement to represent line-endings or other unescaped characters.
+      let statement = JSON.stringify(entry.statement);
+
+      console.error(`   ${entry.fileName}@${entry.lineNumber}, Statement: ${statement}.\n`);
+    });
+
+    // Exit the process with an error exit code to notify the CI.
+    process.exit(1);
+  }
+}
+
+/**
+ * Resolves all files, which should run against the forbidden identifiers check.
+ * @return {Promise.<Array.<string>>} Files to be checked.
+ */
+function findTestFiles() {
+  if (process.env['TRAVIS_PULL_REQUEST']) {
+    return findChangedFiles();
+  }
+
+  let files = sourceFolders.map(folder => {
+    return glob(`${folder}/**/*`);
+  }).reduce((files, fileSet) => files.concat(fileSet), []);
+
+  return Promise.resolve(files);
+}
+
+/**
  * List all the files that have been changed or added in the last commit range.
- * @returns {Promise<Array<string>>} Resolves with a list of files that are
- *     added or changed.
+ * @returns {Promise.<Array.<string>>} Resolves with a list of files that are added or changed.
  */
 function findChangedFiles() {
-  return getCommitRange()
-    .then(range => {
-      return exec(`git diff --name-status ${range} ./src ./e2e`);
-    })
+  let commitRange = process.env['TRAVIS_COMMIT_RANGE'];
+
+  return exec(`git diff --name-status ${commitRange} ${sourceFolders.join(' ')}`)
     .then(rawDiff => {
-      // Ignore deleted files.
-      return rawDiff.split('\n')
-          .filter(function(line) {
-            // Status: C## => Copied (##% confident)
-            //         R## => Renamed (##% confident)
-            //         D   => Deleted
-            //         M   => Modified
-            //         A   => Added
-            return line.match(/([CR][0-9]*|[AM])\s+/);
-          })
-          .map(function(line) {
-            return line.split(/\s+/, 2)[1];
-          });
+      return rawDiff
+        .split('\n')
+        .filter(line => {
+          // Status: C## => Copied (##% confident)
+          //         R## => Renamed (##% confident)
+          //         D   => Deleted
+          //         M   => Modified
+          //         A   => Added
+          return line.match(/([CR][0-9]*|[AM])\s+/);
+        })
+        .map(line => line.split(/\s+/, 2)[1]);
     });
 }
 
-
-// Find all files, check for errors, and output every errors found.
-findChangedFiles()
-  .then(fileList => {
-    // Only match .js or .ts, and remove .d.ts files.
-    return fileList.filter(function(name) {
-      return name.match(/\.[jt]s$/) && !name.match(/\.d\.ts$/);
+/**
+ * Executes a process command and wraps it inside of a promise.
+ * @returns {Promise.<String>}
+ */
+function exec(cmd) {
+  return new Promise(function(resolve, reject) {
+    child_process.exec(cmd, function(err, stdout /*, stderr */) {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(stdout);
+      }
     });
-  })
-  .then(fileList => {
-    // Read every file and return a Promise that will contain an array of
-    // Object of the form { fileName, content }.
-    return Promise.all(fileList.map(function(fileName) {
-      return {
-        fileName: fileName,
-        content: fs.readFileSync(fileName, { encoding: 'utf-8' })
-      };
-    }));
-  })
-  .then(diffList => {
-    // Reduce the diffList to an array of errors. The array will be empty if no errors
-    // were found.
-    return diffList.reduce((errors, diffEntry) => {
-      let fileName = diffEntry.fileName;
-      let content = diffEntry.content.split('\n');
-      let ln = 0;
-
-      // Get all the lines that start with `+`.
-      content.forEach(function(line) {
-        ln++;
-
-        let m = line.match(blockedRegex);
-        if (m) {
-          // Accumulate all errors at once.
-          errors.push({
-            fileName: fileName,
-            lineNumber: ln,
-            statement: m[0]
-          });
-        }
-      });
-      return errors;
-    }, []);
-  })
-  .then(errors => {
-    if (errors.length > 0) {
-      console.error('Error: You are using a statement in your commit, which is not allowed.');
-      errors.forEach(entry => {
-        console.error(`   ${entry.fileName}@${entry.lineNumber}, Statement: ${entry.statement}.\n`);
-      });
-
-      process.exit(1);
-    }
-  })
-  .catch(err => {
-    // An error occured in this script. Output the error and the stack.
-    console.error('An error occured during execution:');
-    console.error(err);
-    console.error(err.stack);
-    process.exit(2);
   });
+}

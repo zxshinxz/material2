@@ -1,8 +1,7 @@
 import {Component} from '@angular/core';
-import {FORM_DIRECTIVES} from '@angular/common';
-import {MdCheckbox} from '@angular2-material/checkbox/checkbox';
 
-interface Task {
+
+export interface Task {
   name: string;
   completed: boolean;
   subtasks?: Task[];
@@ -17,9 +16,8 @@ interface Task {
     }
   `],
   templateUrl: 'nested-checklist.html',
-  directives: [MdCheckbox]
 })
-class MdCheckboxDemoNestedChecklist {
+export class MdCheckboxDemoNestedChecklist {
   tasks: Task[] = [
     {
       name: 'Reminders',
@@ -63,18 +61,22 @@ class MdCheckboxDemoNestedChecklist {
   selector: 'md-checkbox-demo',
   templateUrl: 'checkbox-demo.html',
   styleUrls: ['checkbox-demo.css'],
-  directives: [MdCheckbox, MdCheckboxDemoNestedChecklist, FORM_DIRECTIVES]
 })
 export class CheckboxDemo {
   isIndeterminate: boolean = false;
   isChecked: boolean = false;
   isDisabled: boolean = false;
   alignment: string = 'start';
+  useAlternativeColor: boolean = false;
 
   printResult() {
     if (this.isIndeterminate) {
       return 'Maybe!';
     }
     return this.isChecked ? 'Yes!' : 'No!';
+  }
+
+  checkboxColor() {
+    return this.useAlternativeColor ? 'primary' : 'accent';
   }
 }

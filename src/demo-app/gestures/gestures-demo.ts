@@ -5,7 +5,6 @@ import {Component} from '@angular/core';
   selector: 'gestures-demo',
   templateUrl: 'gestures-demo.html',
   styleUrls: ['gestures-demo.css'],
-  directives: []
 })
 export class GesturesDemo {
   dragCount: number = 0;
@@ -13,4 +12,5 @@ export class GesturesDemo {
   pressCount: number = 0;
   longpressCount: number = 0;
   swipeCount: number = 0;
+  slideCount: number = 0;
 }

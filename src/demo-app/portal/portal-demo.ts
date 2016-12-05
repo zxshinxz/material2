@@ -3,8 +3,7 @@ import {
     Portal,
     ComponentPortal,
     TemplatePortalDirective,
-    PortalHostDirective
-} from '@angular2-material/core/core';
+} from '@angular/material';
 
 
 @Component({
@@ -12,7 +11,6 @@ import {
   selector: 'portal-demo',
   templateUrl: 'portal-demo.html',
   styleUrls: ['portal-demo.css'],
-  directives: [TemplatePortalDirective, PortalHostDirective]
 })
 export class PortalDemo {
   @ViewChildren(TemplatePortalDirective) templatePortals: QueryList<Portal<any>>;
@@ -38,4 +36,4 @@ export class PortalDemo {
   selector: 'science-joke',
   template: `<p> 100 kilopascals go into a bar. </p>`
 })
-class ScienceJoke { }
+export class ScienceJoke { }
